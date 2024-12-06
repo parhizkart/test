@@ -1,0 +1,441 @@
+import itertools
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+# Function to get generation units from predefined input
+def get_generation_units():
+    print("Interactive input is not supported in this environment.")
+    print("Please edit the `generation_units` dictionary directly.")
+    
+    # Predefined generation units (replace this with your actual data)
+    generation_units = {
+        'Unit_A': {'MV': 100, 'Unavailability': 0.1},
+        'Unit_B': {'MV': 200, 'Unavailability': 0.05},
+        'Unit_C': {'MV': 150, 'Unavailability': 0.2},
+    }
+    return generation_units
+
+# Get generation units programmatically
+generation_units = get_generation_units()
+
+# Check if any units were entered
+if not generation_units:
+    print("No generation units entered. Exiting program.")
+else:
+    # Extract unit names
+    unit_names = list(generation_units.keys())
+
+    # Generate all possible combinations of units
+    all_combinations = []
+    for r in range(1, len(unit_names) + 1):
+        all_combinations.extend(itertools.combinations(unit_names, r))
+
+    # Calculate MV, unavailability, and availability probability for each combination
+    results = []
+    for combination in all_combinations:
+        total_mv = sum(generation_units[unit]['MV'] for unit in combination)
+        avg_unavailability = sum(generation_units[unit]['Unavailability'] for unit in combination) / len(combination)
+        availability_probability = 1
+        for unit in combination:
+            availability_probability *= (1 - generation_units[unit]['Unavailability'])  # Availability = 1 - Unavailability
+        results.append({
+            'Combination': ", ".join(combination),
+            'Total MV': total_mv,
+            'Average Unavailability': avg_unavailability,
+            'Availability Probability': availability_probability
+        })
+
+    # Convert results to a DataFrame
+    results_df = pd.DataFrame(results)
+
+    # Save the results to a CSV file
+    results_df.to_csv("generation_units_combinations.csv", index=False)
+
+    # Linear Regression
+    X = np.array(results_df['Availability Probability']).reshape(-1, 1)
+    y = np.array(results_df['Total MV']).reshape(-1, 1)
+    linear_regressor = LinearRegression()
+    linear_regressor.fit(X, y)
+    y_pred = linear_regressor.predict(X)
+
+    # Plot Total MV vs Availability Probability
+    plt.figure(figsize=(10, 6))
+    plt.scatter(results_df['Availability Probability'], results_df['Total MV'], color='blue', label='Data Points')
+    plt.plot(results_df['Availability Probability'], y_pred, color='red', label='Regression Line')
+    plt.fill_between(
+        results_df['Availability Probability'], 
+        y_pred.flatten(), 
+        0, 
+        color='gray', 
+        alpha=0.2, 
+        label='Shaded Area'
+    )
+    plt.title("Total MV vs Availability Probability with Linear Regression")
+    plt.xlabel("Availability Probability")
+    plt.ylabel("Total MV")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("total_mv_vs_availability_probability.png")  # Save the plot as a PNG file
+    plt.show()
+
+    print("\nData saved to 'generation_units_combinations.csv' and the plot saved to 'total_mv_vs_availability_probability.png'.")
+
+
+# Predefined load levels and probabilities (replace with your own data)
+load_data = [
+    {'Load': 100, 'Probability': 0.4},  # Example: Load = 100, Probability = 0.4
+    {'Load': 200, 'Probability': 0.6},  # Example: Load = 200, Probability = 0.6
+]
+
+# Predefined total time length (T)
+T = 8760  # Example: 8760 hours (1 year)
+
+
+
+# Calculate LOLE and LOEE
+LOLE = 0
+LOEE = 0
+
+# Generate all combinations of generation units
+all_combinations = []
+for r in range(1, len(unit_names) + 1):
+    all_combinations.extend(itertools.combinations(unit_names, r))
+
+# Calculate availability probabilities for generation combinations
+generation_combinations = []
+for combination in all_combinations:
+    G_j = sum(generation_units[unit]['MV'] for unit in combination)
+    P_j = 1
+    for unit in combination:
+        P_j *= (1 - generation_units[unit]['Unavailability'])
+    generation_combinations.append({'G_j': G_j, 'P_j': P_j})
+
+# Compute LOLE and LOEE
+for load in load_data:
+    L_i = load['Load']
+    P_i = load['Probability']
+    for gen in generation_combinations:
+        G_j = gen['G_j']
+        P_j = gen['P_j']
+        D_ij = 1 if L_i > G_j else 0
+        LOLE += P_i * P_j * D_ij * T
+        LOEE += P_i * P_j * max(0, L_i - G_j) * T
+
+# Display results
+print("\nResults:")
+print(f"LOLE (Loss of Load Expectation): {LOLE}")
+print(f"LOEE (Loss of Energy Expectation): {LOEE}")
+
+
+# Create synthetic load samples
+num_samples = 1000  # Number of samplings
+load_samples = {}
+for i, load in enumerate(load_data):
+    mean_load = load['Load']
+    std_dev = 0.1 * mean_load  # Assume 10% std deviation
+    load_samples[i] = np.random.normal(mean_load, std_dev, num_samples)
+
+# Linear regression model for generation (already available)
+X_gen = np.array([0.8, 0.85, 0.9, 0.95, 1.0]).reshape(-1, 1)  # Example availability
+y_gen = np.array([80, 150, 200, 250, 300])  # Example MV outputs
+linear_regressor = LinearRegression()
+linear_regressor.fit(X_gen, y_gen)
+
+# Generate generation samples based on regression model
+generation_samples = []
+availability_probabilities = []
+for _ in range(num_samples):
+    availability = np.random.uniform(0.8, 1.0, len(unit_names))  # Random availabilities
+    gen_sample = linear_regressor.predict(availability.reshape(-1, 1)).clip(min=0)
+    generation_samples.append(gen_sample.sum())
+    availability_probabilities.append(np.prod(availability))  # Multiply probabilities for all generators
+
+
+# Calculate DNS, PLOLE, and PLOEE for each sampling
+dns_results = []
+PLOLE = 0
+PLOEE = 0
+
+PLOLE_values = []
+PLOEE_values = []
+
+for k in range(num_samples):
+    for i, load_sample in load_samples.items():
+        L_i = load_sample[k]
+        G_jk = generation_samples[k]
+        DNS_k = max(0, L_i - G_jk)
+        E_ijk = 1 if DNS_k > 0 else 0
+        P_ik = load_data[i]['Probability']
+        P_jk = availability_probabilities[k]
+        
+        # Add to PLOLE and PLOEE
+        PLOLE += P_ik * P_jk * E_ijk * T
+        PLOEE += P_ik * P_jk * DNS_k * T
+        
+        # Store DNS results
+        dns_results.append({
+            'Sample': k + 1,
+            'Load Level': load_data[i]['Load'],
+            'DNS': DNS_k,
+            'PLOLE Contribution': P_ik * P_jk * E_ijk * T,
+            'PLOEE Contribution': P_ik * P_jk * DNS_k * T,
+        })
+# PLOLE and PLOEE contributions
+        PLOLE_k = P_ik * P_jk * E_ijk * T
+        PLOEE_k = P_ik * P_jk * DNS_k * T
+        PLOLE_values.append(PLOLE_k)
+        PLOEE_values.append(PLOEE_k)
+
+# Convert DNS results to a DataFrame
+dns_df = pd.DataFrame(dns_results)
+
+# Save results to a CSV file
+dns_df.to_csv("plo_results.csv", index=False)
+
+# Display PLOLE and PLOEE
+print("\nResults:")
+print(f"PLOLE (Probabilistic Loss of Load Expectation): {PLOLE}")
+print(f"PLOEE (Probabilistic Loss of Energy Expectation): {PLOEE}")
+print("\nDetailed DNS, PLOLE, and PLOEE results saved to 'plo_results.csv'.")
+
+
+ # Accumulate values
+
+
+# Plot histograms for PLOLE and PLOEE
+plt.figure(figsize=(12, 6))
+plt.hist(PLOLE_values, bins=30, alpha=0.7, color='blue', label='PLOLE (Hours per Time Period)')
+plt.title('Histogram of PLOLE')
+plt.xlabel('PLOLE (Hours per Time Period)')
+plt.ylabel('Frequency')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(12, 6))
+plt.hist(PLOEE_values, bins=30, alpha=0.7, color='green', label='PLOEE (MWh per Time Period)')
+plt.title('Histogram of PLOEE')
+plt.xlabel('PLOEE (MWh per Time Period)')
+plt.ylabel('Frequency')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Plot exceedance curves for PLOLE and PLOEE
+PLOLE_sorted = np.sort(PLOLE_values)
+PLOEE_sorted = np.sort(PLOEE_values)
+exceedance_probability = 1.0 - np.arange(1, num_samples * len(load_data) + 1) / (num_samples * len(load_data))
+
+plt.figure(figsize=(12, 6))
+plt.plot(PLOLE_sorted, exceedance_probability, color='blue', label='PLOLE Exceedance Curve')
+plt.title('Exceedance Curve for PLOLE')
+plt.xlabel('PLOLE (Hours per Time Period)')
+plt.ylabel('Exceedance Probability')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(12, 6))
+plt.plot(PLOEE_sorted, exceedance_probability, color='green', label='PLOEE Exceedance Curve')
+plt.title('Exceedance Curve for PLOEE')
+plt.xlabel('PLOEE (MWh per Time Period)')
+plt.ylabel('Exceedance Probability')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+import streamlit as st
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+import matplotlib.pyplot as plt
+
+# Helper Functions
+def generate_dns(load_data, generation_units, num_samples, T):
+    # Your existing calculations for DNS, PLOLE, and PLOEE here
+    # Return calculated results (DNS, PLOLE, PLOEE) and data for plots
+    return dns_df, PLOLE_values, PLOEE_values
+
+# Streamlit Application
+st.title("Reliability Analysis Platform")
+
+# Input Section
+st.sidebar.header("Inputs")
+
+# Load Data Inputs
+num_loads = st.sidebar.number_input("Number of Load Levels", min_value=1, value=2)
+load_data = []
+for i in range(num_loads):
+    load = st.sidebar.number_input(f"Load Level {i+1} (MW)", min_value=0.0, value=float(100 * (i+1)))
+    prob = st.sidebar.number_input(f"Probability for Load Level {i+1}", min_value=0.0, max_value=1.0, value=0.5)
+    load_data.append({'Load': load, 'Probability': prob})
+
+# Generation Unit Inputs
+num_units = st.sidebar.number_input("Number of Generation Units", min_value=1, value=3)
+generation_units = {}
+for i in range(num_units):
+    unit_name = st.sidebar.text_input(f"Name of Unit {i+1}", value=f"Unit_{i+1}")
+    capacity = st.sidebar.number_input(f"Capacity of {unit_name} (MW)", min_value=0.0, value=100.0)
+    unavailability = st.sidebar.number_input(f"Unavailability of {unit_name}", min_value=0.0, max_value=1.0, value=0.1)
+    generation_units[unit_name] = {'MV': capacity, 'Unavailability': unavailability}
+
+# Total Time Period
+T = st.sidebar.number_input("Total Time Period (hours)", min_value=1.0, value=8760.0)
+
+# Perform Calculations
+if st.button("Run Analysis"):
+    dns_df, PLOLE_values, PLOEE_values = generate_dns(load_data, generation_units, num_samples=1000, T=T)
+
+    # Display Results
+    st.subheader("PLOLE and PLOEE Results")
+    st.write(f"PLOLE: {sum(PLOLE_values)} hours per time period")
+    st.write(f"PLOEE: {sum(PLOEE_values)} MWh per time period")
+
+    st.subheader("DNS Results")
+    st.dataframe(dns_df)
+
+    # Histograms
+    st.subheader("Histograms")
+    fig, ax = plt.subplots()
+    ax.hist(PLOLE_values, bins=30, alpha=0.7, color='blue', label='PLOLE')
+    ax.set_title("PLOLE Histogram")
+    st.pyplot(fig)
+
+    fig, ax = plt.subplots()
+    ax.hist(PLOEE_values, bins=30, alpha=0.7, color='green', label='PLOEE')
+    ax.set_title("PLOEE Histogram")
+    st.pyplot(fig)
+
+    # Exceedance Curves
+    st.subheader("Exceedance Curves")
+    fig, ax = plt.subplots()
+    ax.plot(sorted(PLOLE_values), np.linspace(1, 0, len(PLOLE_values)), color='blue', label='PLOLE Exceedance Curve')
+    ax.set_title("PLOLE Exceedance Curve")
+    st.pyplot(fig)
+
+    fig, ax = plt.subplots()
+    ax.plot(sorted(PLOEE_values), np.linspace(1, 0, len(PLOEE_values)), color='green', label='PLOEE Exceedance Curve')
+    ax.set_title("PLOEE Exceedance Curve")
+    st.pyplot(fig)
+
+
+# Predefined load levels and probabilities (replace with your own data)
+load_data = [
+    {'Load': 100, 'Probability': 0.4},  # Example: Load = 100, Probability = 0.4
+    {'Load': 200, 'Probability': 0.6},  # Example: Load = 200, Probability = 0.6
+]
+
+# Predefined total time length (T)
+T = 8760  # Example: 8760 hours (1 year)
+
+
+
+# Calculate LOLE and LOEE
+LOLE = 0
+LOEE = 0
+
+# Generate all combinations of generation units
+all_combinations = []
+for r in range(1, len(unit_names) + 1):
+    all_combinations.extend(itertools.combinations(unit_names, r))
+
+# Calculate availability probabilities for generation combinations
+generation_combinations = []
+for combination in all_combinations:
+    G_j = sum(generation_units[unit]['MV'] for unit in combination)
+    P_j = 1
+    for unit in combination:
+        P_j *= (1 - generation_units[unit]['Unavailability'])
+    generation_combinations.append({'G_j': G_j, 'P_j': P_j})
+
+# Compute LOLE and LOEE
+for load in load_data:
+    L_i = load['Load']
+    P_i = load['Probability']
+    for gen in generation_combinations:
+        G_j = gen['G_j']
+        P_j = gen['P_j']
+        D_ij = 1 if L_i > G_j else 0
+        LOLE += P_i * P_j * D_ij * T
+        LOEE += P_i * P_j * max(0, L_i - G_j) * T
+
+# Display results
+print("\nResults:")
+print(f"LOLE (Loss of Load Expectation): {LOLE}")
+print(f"LOEE (Loss of Energy Expectation): {LOEE}")
+import streamlit as st
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+import matplotlib.pyplot as plt
+
+# Helper Functions
+def generate_dns(load_data, generation_units, num_samples, T):
+    # Your existing calculations for DNS, PLOLE, and PLOEE here
+    # Return calculated results (DNS, PLOLE, PLOEE) and data for plots
+    return dns_df, PLOLE_values, PLOEE_values
+
+# Streamlit Application
+st.title("Reliability Analysis Platform")
+
+# Input Section
+st.sidebar.header("Inputs")
+
+# Load Data Inputs
+num_loads = st.sidebar.number_input("Number of Load Levels", min_value=1, value=2)
+load_data = []
+for i in range(num_loads):
+    load = st.sidebar.number_input(f"Load Level {i+1} (MW)", min_value=0.0, value=float(100 * (i+1)))
+    prob = st.sidebar.number_input(f"Probability for Load Level {i+1}", min_value=0.0, max_value=1.0, value=0.5)
+    load_data.append({'Load': load, 'Probability': prob})
+
+# Generation Unit Inputs
+num_units = st.sidebar.number_input("Number of Generation Units", min_value=1, value=3)
+generation_units = {}
+for i in range(num_units):
+    unit_name = st.sidebar.text_input(f"Name of Unit {i+1}", value=f"Unit_{i+1}")
+    capacity = st.sidebar.number_input(f"Capacity of {unit_name} (MW)", min_value=0.0, value=100.0)
+    unavailability = st.sidebar.number_input(f"Unavailability of {unit_name}", min_value=0.0, max_value=1.0, value=0.1)
+    generation_units[unit_name] = {'MV': capacity, 'Unavailability': unavailability}
+
+# Total Time Period
+T = st.sidebar.number_input("Total Time Period (hours)", min_value=1.0, value=8760.0)
+
+# Perform Calculations
+if st.button("Run Analysis"):
+    dns_df, PLOLE_values, PLOEE_values = generate_dns(load_data, generation_units, num_samples=1000, T=T)
+
+    # Display Results
+    st.subheader("PLOLE and PLOEE Results")
+    st.write(f"PLOLE: {sum(PLOLE_values)} hours per time period")
+    st.write(f"PLOEE: {sum(PLOEE_values)} MWh per time period")
+
+    st.subheader("DNS Results")
+    st.dataframe(dns_df)
+
+    # Histograms
+    st.subheader("Histograms")
+    fig, ax = plt.subplots()
+    ax.hist(PLOLE_values, bins=30, alpha=0.7, color='blue', label='PLOLE')
+    ax.set_title("PLOLE Histogram")
+    st.pyplot(fig)
+
+    fig, ax = plt.subplots()
+    ax.hist(PLOEE_values, bins=30, alpha=0.7, color='green', label='PLOEE')
+    ax.set_title("PLOEE Histogram")
+    st.pyplot(fig)
+
+    # Exceedance Curves
+    st.subheader("Exceedance Curves")
+    fig, ax = plt.subplots()
+    ax.plot(sorted(PLOLE_values), np.linspace(1, 0, len(PLOLE_values)), color='blue', label='PLOLE Exceedance Curve')
+    ax.set_title("PLOLE Exceedance Curve")
+    st.pyplot(fig)
+
+    fig, ax = plt.subplots()
+    ax.plot(sorted(PLOEE_values), np.linspace(1, 0, len(PLOEE_values)), color='green', label='PLOEE Exceedance Curve')
+    ax.set_title("PLOEE Exceedance Curve")
+    st.pyplot(fig)
